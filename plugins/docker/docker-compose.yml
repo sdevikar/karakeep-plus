@@ -1,0 +1,152 @@
+
+version: "3.8"
+
+services:
+  # Reverse proxy is commonly preconfigured on NAS (Synology/QNAP) using GUI.
+  # If you prefer Caddy/Nginx, add a service; here we assume it's external.
+
+  web:
+    # If you use upstream Karakeep image:
+    image: ghcr.io/karakeep-app/karakeep:release
+    # OR build your customized fork:
+    # build: ../apps/web
+    container_name: defragment-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - ../.env
+    environment:
+      MEILI_ADDR: http://meilisearch:7700
+      BROWSER_WEB_URL: http://chrome:9222
+      # Example: expose your custom API endpoint to web
+      DEFRAG_API_URL: http://api:8080
+    volumes:
+      - ../data:/data
+
+  api:
+    build: ../apps/api
+    container_name: defragment-api
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    ports:
+      - "8080:8080"
+    depends_on:
+      - meilisearch
+      - postgres
+    environment:
+      MEILI_ADDR: http://meilisearch:7700
+      PGHOST: postgres
+      PGUSER: defrag
+      PGPASSWORD: defragpw
+      PGDATABASE: defragdb
+      PGPORT: 5432
+
+  workers:
+    build: ../apps/workers
+    container_name: defragment-workers
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      - api
+      - meilisearch
+      - postgres
+    environment:
+      MEILI_ADDR: http://meilisearch:7700
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.13.3
+    container_name: meilisearch
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - ../meilisearch:/meili_data
+    ports:
+      - "7700:7700"
+
+  chrome:
+    image: gcr.io/zenika-hub/alpine-chrome:123
+    container_name: headless-chrome
+    restart: unless-stopped
+    command:
+      - --no-sandbox
+      - --disable-gpu
+      - --disable-dev-shm-usage
+      - --remote-debugging-address=0.0.0.0
+      - --remote-debugging-port=9222
+      - --hide-scrollbars
+    ports:
+      - "9222:9222"
+
+  postgres:
+    image: postgres:16
+    container_name: defragment-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: defragdb
+      POSTGRES_USER: defrag
+      POSTGRES_PASSWORD: defragpw
+    volumes:
+      - ../pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  pgvector-init:
+    image: postgres:16
+    container_name: pgvector-init
+    restart: "no"
+    depends_on:
+      - postgres
+    command: >
+      bash -lc "sleep 5 &&
+                psql -h postgres -U defrag -d defragdb
+                -c 'CREATE EXTENSION IF NOT EXISTS vector;'"
+    environment:
+      PGPASSWORD: defragpw
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    volumes:
+      - ../ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+
+  connector-onenote:
+    build: ../packages/connectors/onenote
+    container_name: connector-onenote
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      - api
+      - meilisearch
+      - postgres
+
+  connector-keep:
+    build: ../packages/connectors/keep
+    container_name: connector-keep
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      - api
+      - meilisearch
+      - postgres
+
+  connector-sheets:
+    build: ../packages/connectors/sheets
+    container_name: connector-sheets
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      - api
+      - meilisearch
+      - postgres
